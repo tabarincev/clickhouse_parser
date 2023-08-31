@@ -1,2 +1,2 @@
-# clickhouse_parser
-Clickhouse parser based on PyParsing 
+# Clickhouse AST Parser
+Clickhouse parser based on PyParsing
