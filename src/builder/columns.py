@@ -1,7 +1,80 @@
-from typing import Dict
+from math import prod
+from itertools import product
+from typing import Dict, List
+from collections import namedtuple
+
+from src.builder.builder import BaseBuilder
 
 
-class ColumnBuilder:
+FactorTerm = namedtuple('FactorTerm', ['neg', 'variable'])
+
+
+class BooleanBuilder(BaseBuilder):
+    def __init__(self):
+        self.column_builder = ColumnBuilder()
+
+    def build(self, tree: Dict) -> str:
+        tree_p = self.build_tree(tree)
+        tree_n = self.process_tree(tree_p)
+        return self.repr_factor_term(tree_n)
+
+    def build_tree(self, tree: Dict):
+        if isinstance(tree, dict):
+            if 'or' in tree:
+                or_res = []
+
+                it = iter(tree['or'])
+                or_res.extend(self.build_tree(next(it)))
+
+                for op in it:
+                    terms = self.build_tree(op)
+                    or_res.extend(terms)
+                return or_res
+
+            elif 'and' in tree:
+                and_res = []
+
+                it = iter(tree['and'])
+                and_res.append(self.build_tree(next(it)))
+
+                for op in it:
+                    term = self.build_tree(op)
+                    and_res.append(term)
+                return and_res
+
+            elif any([key for key in self.column_builder.expected_keys]):
+                return [FactorTerm(1, [self.column_builder.build_full_expr(tree)])]
+
+            else:
+                raise KeyError('Invalid key in tree: {}'.format(tree))
+        else:
+            raise TypeError('Invalid type of tree element: {}'.format(tree))
+
+    @staticmethod
+    def process_tree(tree: Dict) -> List[FactorTerm]:
+        product_tree = list(product(*tree))
+
+        return [
+            FactorTerm(
+                prod([i.neg for i in term]),
+                [j for i in term for j in i.variable]
+            )
+            for term in product_tree
+        ]
+
+    @staticmethod
+    def repr_factor_term(factor_term: List[FactorTerm]) -> str:
+        result = []
+
+        a = [i.variable for i in factor_term]
+
+        for el in a:
+            tmp = ' and '.join(el)
+            result.append(tmp)
+        return ' or '.join(result)
+
+
+class ColumnBuilder:  # todo BaseBuilder
     expected_keys = (
         'case_term',
         'cast_term',
@@ -28,11 +101,11 @@ class ColumnBuilder:
         result = ''
 
         if isinstance(ast, Dict):
-            if ast:
-                pass
+            if not ast:
+                return result
 
-            if 'or' in ast:
-                pass
+            # if any(['or', 'and' in ast]):
+            #     result += self.build_boolean_op(ast)
 
             if 'case_term' in ast:
                 result += self.build_case(ast)
@@ -47,7 +120,7 @@ class ColumnBuilder:
                 result += self.build_extract(ast)
 
             elif 'interval' in ast:
-                result = self.build_interval(ast)
+                result += self.build_interval(ast)
 
             elif 'substring' in ast:
                 pass
@@ -95,7 +168,7 @@ class ColumnBuilder:
                 result += self.build_index(ast)
             else:
                 raise ValueError(
-                    'Invalid structure of AST - {keys}'.format(
+                    'Invalid structure of AST - {keys} expected'.format(
                         keys=', '.join(self.expected_keys)
                     )
                 )
@@ -103,8 +176,62 @@ class ColumnBuilder:
             raise TypeError('Invalid type in SQL AST - "Dict" expected')
         return result
 
-    def build_boolean_op(self, ast: Dict) -> str:
-        return ''
+    # def build_boolean_op(self, tree: Dict) -> str:
+    #     tree_p = self._build_bool_tree(tree)
+    #     tree_n = self._process_tree(tree_p)
+    #     return self._repr_factor_term(tree_n)
+
+    def _build_bool_tree(self, tree: Dict):
+        if isinstance(tree, dict):
+            if 'or' in tree:
+                or_res = []
+
+                it = iter(tree['or'])
+                or_res.extend(self._build_bool_tree(next(it)))
+
+                for op in it:
+                    terms = self._build_bool_tree(op)
+                    or_res.extend(terms)
+                return or_res
+
+            elif 'and' in tree:
+                and_res = []
+
+                it = iter(tree['and'])
+                and_res.append(self._build_bool_tree(next(it)))
+
+                for op in it:
+                    term = self._build_bool_tree(op)
+                    and_res.append(term)
+                return and_res
+
+            elif any([key for key in ColumnBuilder().expected_keys]):
+                return [FactorTerm(1, [ColumnBuilder().build_full_expr(tree)])]
+            else:
+                raise KeyError('Invalid key in tree: {}'.format(tree))
+        else:
+            raise TypeError('Invalid type of tree element: {}'.format(tree))
+
+    def _process_tree(self, tree: Dict) -> List[FactorTerm]:
+        product_tree = list(product(*tree))
+
+        return [
+            FactorTerm(
+                prod([i.neg for i in term]),
+                [j for i in term for j in i.variable]
+            )
+            for term in product_tree
+        ]
+
+    def _repr_factor_term(self, factor_term: List[FactorTerm]) -> str:
+        result = []
+
+        a = [i.variable for i in factor_term]
+
+        for el in a:
+            tmp = ' and '.join(el)
+            result.append(tmp)
+        return ' or '.join(result)
 
     def build_case(self, ast: Dict) -> str:
         if 'case_term' not in ast:
@@ -260,7 +387,7 @@ class ColumnBuilder:
                 'Invalid structure of SQL AST - Expected "parens_term" key'
             )
         return '({expr})'.format(
-            expr=self.build_full_expr(ast['parens_term']['term'])
+            expr=self.build_full_expr(ast['parens_term'])
         )
 
     def build_tuple(self, ast: Dict) -> str:
@@ -297,21 +424,6 @@ class ColumnBuilder:
             index=self.build_full_expr(ast['index_term']['index'])
         )
 
-    def build_unary_operator(self, ast: Dict) -> str:
-        pass
 
-    def build_binary_operator(self, ast: Dict) -> str:
-        pass
-
-    def build_ternary_operator(self, ast: Dict) -> str:
-        pass
-
-
-
-
-c = ColumnBuilder().build_full_expr(
-    # ast= {'function_term': {'name': 'funct', 'args': [{'column_term': {'column': 'name'}}, {'column_term': {'column': 'a'}}], 'distinct': True}}
-    ast={'index_term': {'term': {'extract_term': {'extract_type': 'day', 'extract_from': {'asterisk_term': {'table': 't', 'column': '*'}}}}, 'index': {'literal_term': {'numeric': '0'}}}}
-)
-print(c)
-# print(str(c))
+if __name__ == '__main__':
+    c = ColumnBuilder().build_full_expr({'and': [{'or': [{'column_term': {'column': 'c'}}, {'column_term': {'column': 'm'}}]}, {'column_term': {'column': 'a'}}, {'column_term': {'column': 'g'}}]})

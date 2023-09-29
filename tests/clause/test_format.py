@@ -1,7 +1,7 @@
 import unittest
 
 from typing import Dict
-from src.statement.select_union.format import Format
+from src.lexer.query.select_union.format import Format
 
 
 class TestFormatClause(unittest.TestCase):

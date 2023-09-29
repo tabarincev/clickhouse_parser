@@ -1,12 +1,14 @@
 from pyparsing import *
+from functools import lru_cache
 
-from src.keywords import *
+
 from src.literals import *
 
 from src.utils.infix_processing import (
     UnaryOperator, BinaryOperator, BetweenOperator,
     IsInLikeOperator
 )
+
 
 ParserElement.enable_left_recursion()
 
@@ -15,31 +17,34 @@ class ColumnExprTerm:
     def __init__(
         self,
         column_expr: ParserElement,
-        select_union_statement: ParserElement
+        select_union_statement: ParserElement,
+        window_expr: ParserElement
     ):
         self._column_expr = column_expr
         self._select_union_statement = select_union_statement
+        self._window_expr = window_expr
 
     @property
     def notation(self) -> ParserElement:
         return (
             MatchFirst([
                 self.case,
-                # self.cast,
+                # self.cast, # todo
                 self.date,
                 self.extract,
                 self.interval,
                 self.substring,
                 self.timestamp,
                 # self.trim,
-                # self.window_function,
+                self.window_function,
                 # self.window_function_target,
                 self.function,
-                # self.lambda_function,
+                self.lambda_function,
                 self.asterisk,
                 self.column_identifier,
                 self.literal,
                 self.select_union_statement,
+                self.braces,
                 self.parens,
                 self.tuple_,
                 self.array_
@@ -47,9 +52,11 @@ class ColumnExprTerm:
             + Optional(LBRACKET + self._column_expr('index') + RBRACKET)
             + Optional(Optional(AS) + identifier('alias'))
         ).set_parse_action(
-            lambda term: (
-                {'index_term': {'term': term['term'], 'index': term['index']}}
-                if term.get('index') else term['term']
+            lambda term: ({
+                'index_term': {
+                    'term': term['term'],
+                    'index': term['index']}
+                } if term.get('index') else term['term']
             ) | ({'alias': term['alias'][0]} if term.get('alias') else {})
         )
 
@@ -65,23 +72,22 @@ class ColumnExprTerm:
             CASE
             + Optional(identifier('identifier'))
             + OneOrMore(
-                (
-                    (WHEN + self._column_expr('expr')).set_parse_action(
-                        lambda term: {'when': term['expr']}
-                    )('when')
-                    + (THEN + self._column_expr('expr')).set_parse_action(
-                        lambda term: {'then': term['expr']}
-                    )('then')
-                ).set_parse_action(
-                    lambda term: {'case': term['when'] | term['then']}
-                )
-            )('cases')
-            + Optional(
-                (ELSE + self._column_expr('expr')).set_parse_action(
-                    lambda term: term['expr']
-                )('else')
+            (
+                (WHEN + self._column_expr('expr')).set_parse_action(
+                    lambda term: {'when': term['expr']}
+                )('when')
+                + (THEN + self._column_expr('expr')).set_parse_action(
+                lambda term: {'then': term['expr']}
+            )('then')
+            ).set_parse_action(
+                lambda term: {'case': term['when'] | term['then']}
             )
-            # + Optional(case_else('else'))
+        )('cases')
+            + Optional(
+            (ELSE + self._column_expr('expr')).set_parse_action(
+                lambda term: term['expr']
+            )('else')
+        )
             + END
         ).set_parse_action(
             lambda term: {
@@ -97,7 +103,8 @@ class ColumnExprTerm:
 
     @property  # todo cast_type_expr
     def cast(self) -> ParserElement:
-        return CAST + LPAR + self._column_expr('cast_object') + AS  # + column_type_expr + RPAR
+        return CAST + LPAR + self._column_expr('cast_object') \
+               + AS  # + column_type_expr + RPAR
 
     @property
     def date(self) -> ParserElement:
@@ -174,7 +181,8 @@ class ColumnExprTerm:
 
     @property
     def timestamp(self) -> ParserElement:
-        return (TIMESTAMP + string_literal('timestamp_string')).set_parse_action(
+        return (TIMESTAMP + string_literal(
+            'timestamp_string')).set_parse_action(
             lambda term: {'timestamp_term': term['timestamp_string']}
         )
 
@@ -201,13 +209,24 @@ class ColumnExprTerm:
             }
         )
 
-    @property  # todo WindowExpr
+    @property
     def window_function(self) -> ParserElement:
         return (
             identifier('window_identifier')
-            + LPAR + delimited_list(self._column_expr)('window_args') + RPAR
-            + OVER + LPAR  # todo WindowExpr()
+            + LPAR
+            + Optional(delimited_list(self._column_expr)('window_args'))
             + RPAR
+            + OVER + LPAR + Optional(self._window_expr('over')) + RPAR
+        ).set_parse_action(
+            lambda term: {
+                'window_function': {
+                    'identifier': term['window_identifier'][0],
+                    'window_args': (term['window_args'].as_list()
+                                    if term.get('window_args') else []),
+                    'over': (term['over'][0]
+                             if term.get('over') else {})
+                }
+            }
         )
 
     @property  # todo test
@@ -239,14 +258,15 @@ class ColumnExprTerm:
                         self._column_expr
                     ])
                 )('column_arg_expr')
-            )
-            + RPAR
+            ) + RPAR
         ).set_parse_action(
             lambda term: {
                 'function_term': {
                     'name': term['function_name'],
-                    'args': term['column_arg_expr'].as_list() if term.get('column_arg_expr') else []
-                } | ({'distinct': True} if term.get('distinct') else {})
+                    'args': (term['column_arg_expr'].as_list()
+                             if term.get('column_arg_expr') else [])
+                } | ({'distinct': True}
+                     if term.get('distinct') else {})
             }
         )
 
@@ -277,13 +297,6 @@ class ColumnExprTerm:
                 lambda term: {
                     'asterisk_term': {
                         'table': term['table'],
-                        'column': '*'
-                    }
-                }
-            ),
-            ASTERISK.set_parse_action(
-                lambda term: {
-                    'asterisk_term': {
                         'column': '*'
                     }
                 }
@@ -325,23 +338,28 @@ class ColumnExprTerm:
                         'column': term['column']
                     }
                 }
+            ),
+            (
+                ASTERISK('asterisk')
+            ).set_parse_action(
+                lambda term: {'column_term': '*'}
             )
         ])
 
     @property
     def literal(self) -> ParserElement:
         return MatchFirst([
-            Word(nums)('num'),
-            string_literal('string'),
-            NULL('null')
+            pyparsing_common.number.set_parse_action(
+                lambda term: {'numeric': term[0]}
+            ),
+            string_literal.set_parse_action(
+                lambda term: {'string': term[0]}
+            ),
+            NULL.set_parse_action(
+                lambda term: {'literal': 'NULL'}
+            )
         ]).set_parse_action(
-            lambda term: {
-                'literal_term': (
-                    {'numeric': term['num']} if term.get('num') else {}
-                    | {'string': term['string']} if term.get('string') else {}
-                    | {'literal': 'NULL'} if term.get('null') else {}
-                )
-            }
+            lambda term: {'literal_term': term[0]}
         )
 
     @property  # todo
@@ -353,11 +371,15 @@ class ColumnExprTerm:
         return (
             LPAR + self._column_expr('term') + RPAR
         ).set_parse_action(
-            lambda term: {
-                'parens_term': {
-                    'term': term['term']
-                }
-            }
+            lambda term: {'parens_term': term['term']}
+        )
+
+    @property
+    def braces(self):
+        return (
+            Literal('{') + self._column_expr('term') + Literal('}')
+        ).set_parse_action(
+            lambda term: {'brace_term': term['term']}
         )
 
     @property
@@ -369,7 +391,8 @@ class ColumnExprTerm:
         ).set_parse_action(
             lambda term: {
                 'tuple_term': {
-                    'args': term['args'].as_list() if term.get('args') else []
+                    'args': (term['args'].as_list()
+                             if term.get('args') else [])
                 }
             }
         )
@@ -383,7 +406,7 @@ class ColumnExprTerm:
         ).set_parse_action(
             lambda term: {
                 'array_term': {
-                    'args':  (
+                    'args': (
                         term['args'].as_list()
                         if term.get('args') else []
                     )
@@ -396,12 +419,15 @@ class ColumnExpr:
     def __init__(
         self,
         column_expr: ParserElement,
-        select_union_statement: ParserElement
+        select_union_statement: ParserElement,
+        window_expr: ParserElement
     ):
         self._column_expr = column_expr
         self._select_union_statement = select_union_statement
+        self._window_expr = window_expr
 
     @property
+    @lru_cache
     def notation(self) -> ParserElement:
         self._column_expr << infix_notation(
             self.term, [
@@ -471,12 +497,46 @@ class ColumnExpr:
 
     @property
     def term(self) -> ParserElement:
-        return ColumnExprTerm(self._column_expr, self._select_union_statement).notation
-#
-#
-# if __name__ == '__main__':
-#     from ast import literal_eval
-#     column_expr = Forward()
-#
-#     c = ColumnExpr(column_expr)
-#     print(literal_eval(str(c.notation.parse_string('funct(distinct name, a, t.*)', parse_all=True))))
+        return ColumnExprTerm(
+            self._column_expr,
+            self._select_union_statement,
+            self._window_expr
+        ).notation
+
+
+if __name__ == '__main__':
+    from ast import literal_eval
+    from src.lexer.query.select_union.window import WindowExpr
+
+    column_expr = Forward()
+    select = Forward()
+    window_expr = Forward()
+
+    c = ColumnExpr(
+        column_expr,
+        select_union_statement=select,
+        window_expr=WindowExpr(
+            window_expr=window_expr,
+            column_expr=ColumnExpr(
+                column_expr=column_expr,
+                select_union_statement=select,
+                window_expr=window_expr
+            ).notation
+        ).notation
+    )
+    print(literal_eval(str(c.notation.parse_string("""
+        row_number() over (partition BY object_id_int order by datetime desc) as a1""", parse_all=True))))
+
+    # ct = ColumnExprTerm(
+    #     column_expr=column_expr,
+    #     select_union_statement=select,
+    #     window_expr=WindowExpr(
+    #         window_expr=window_expr,
+    #         column_expr=ColumnExpr(
+    #             column_expr=column_expr,
+    #             select_union_statement=select,
+    #             window_expr=window_expr
+    #         ).notation
+    #     ).notation
+    # ).notation
+    # print(ct.parse_string('row_number(1) over ()', parse_all=True))
