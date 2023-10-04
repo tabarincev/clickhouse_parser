@@ -1,0 +1,2 @@
+class CreateView:
+    pass

@@ -1,0 +1,2 @@
+class AlterPartition:
+    pass

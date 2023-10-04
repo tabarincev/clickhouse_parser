@@ -1,0 +1,2 @@
+class AlterConstraint:
+    pass

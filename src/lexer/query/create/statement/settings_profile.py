@@ -1,0 +1,2 @@
+class CreateSettingsProfile:
+    pass

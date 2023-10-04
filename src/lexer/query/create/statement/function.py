@@ -1,0 +1,2 @@
+class CreateFunction:
+    pass

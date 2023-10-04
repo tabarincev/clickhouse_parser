@@ -1,0 +1,2 @@
+class AlterProjection:
+    pass

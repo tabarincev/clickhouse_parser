@@ -1,0 +1,2 @@
+class CreateQuota:
+    pass

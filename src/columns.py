@@ -3,7 +3,7 @@ from functools import lru_cache
 
 
 from src.literals import *
-
+from src.keywords import FROM, AS
 from src.utils.infix_processing import (
     UnaryOperator, BinaryOperator, BetweenOperator,
     IsInLikeOperator
@@ -36,10 +36,11 @@ class ColumnExprTerm:
                 self.substring,
                 self.timestamp,
                 # self.trim,
+                self.lambda_function,
                 self.window_function,
                 # self.window_function_target,
+
                 self.function,
-                self.lambda_function,
                 self.asterisk,
                 self.column_identifier,
                 self.literal,
@@ -50,7 +51,7 @@ class ColumnExprTerm:
                 self.array_
             ])('term')
             + Optional(LBRACKET + self._column_expr('index') + RBRACKET)
-            + Optional(Optional(AS) + identifier('alias'))
+            + Optional(Optional(AS) + ~FROM + identifier('alias'))
         ).set_parse_action(
             lambda term: ({
                 'index_term': {
@@ -273,16 +274,19 @@ class ColumnExprTerm:
     @property  # todo test
     def lambda_function(self) -> ParserElement:
         return (
-            MatchFirst([
-                LPAR + delimited_list(identifier)('identifiers_list') + RPAR,
+            function_name('function_name')
+            + LPAR
+            + MatchFirst([
+                LPAR + delimited_list(self._column_expr)('identifiers_list') + RPAR,
                 delimited_list(identifier)('identifiers_list')
             ])
-            + ARROW + self._column_expr('lambda_expr')
+            + ARROW + delimited_list(self._column_expr)('lambda_expr')
+            + RPAR
         ).set_parse_action(
             lambda term: {
                 'lambda_function_term': {
-                    'identifiers_list': term['identifiers_list'],
-                    'expr': term['lambda_expr']
+                    'identifiers_list': term['identifiers_list'].as_list(),
+                    'expr': term['lambda_expr'].as_list()
                 }
             }
         )
@@ -307,9 +311,9 @@ class ColumnExprTerm:
     def column_identifier(self) -> ParserElement:
         return MatchFirst([
             (
-                database('database') + DOT
-                + table('table') + DOT
-                + column('column')
+                pyparsing_common.identifier('database') + DOT
+                + pyparsing_common.identifier('table') + DOT
+                + pyparsing_common.identifier('column')
             ).set_parse_action(
                 lambda term: {
                     'column_term': {
@@ -320,8 +324,8 @@ class ColumnExprTerm:
                 }
             ),
             (
-                table('table') + DOT
-                + column('column')
+                pyparsing_common.identifier('table') + DOT
+                + pyparsing_common.identifier('column')
             ).set_parse_action(
                 lambda term: {
                     'column_term': {
@@ -331,7 +335,7 @@ class ColumnExprTerm:
                 }
             ),
             (
-                column('column')
+                pyparsing_common.identifier('column')
             ).set_parse_action(
                 lambda term: {
                     'column_term': {
@@ -524,8 +528,8 @@ if __name__ == '__main__':
             ).notation
         ).notation
     )
-    print(literal_eval(str(c.notation.parse_string("""
-        row_number() over (partition BY object_id_int order by datetime desc) as a1""", parse_all=True))))
+
+    print(c.notation.parse_string('`name`', parse_all=True))
 
     # ct = ColumnExprTerm(
     #     column_expr=column_expr,
@@ -539,4 +543,3 @@ if __name__ == '__main__':
     #         ).notation
     #     ).notation
     # ).notation
-    # print(ct.parse_string('row_number(1) over ()', parse_all=True))
